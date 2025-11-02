@@ -1,45 +1,48 @@
 from fastapi import APIRouter, HTTPException, Depends
 from typing import List
+from sqlalchemy.orm import Session
 from app.schemas.inventory import InventoryAdjustment, InventoryResponse
-from app.models.database import db, InventoryEvent
+from app.db.models import Product, Store, InventoryEvent
+from app.db.base import get_db
 from app.routes.auth import get_current_user_id
 from datetime import datetime
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
 
-def get_user_store_id(user_id: str) -> str:
-    for store in db.stores.values():
-        if store.user_id == user_id:
-            return store.id
-    raise HTTPException(status_code=404, detail="Store not found")
+def get_user_store_id(user_id: str, db: Session) -> str:
+    store = db.query(Store).filter(Store.user_id == user_id).first()
+    if not store:
+        raise HTTPException(status_code=404, detail="Store not found")
+    return store.id
 
 @router.get("", response_model=List[InventoryResponse])
-async def get_inventory(user_id: str = Depends(get_current_user_id)):
-    store_id = get_user_store_id(user_id)
+async def get_inventory(
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db)
+):
+    store_id = get_user_store_id(user_id, db)
     
-    inventory = []
-    for product in db.products.values():
-        if product.store_id == store_id:
-            inventory.append(InventoryResponse(
-                product_id=product.id,
-                product_name=product.name,
-                current_stock=product.stock,
-                sku=product.sku
-            ))
+    products = db.query(Product).filter(Product.store_id == store_id).all()
     
-    return inventory
+    return [InventoryResponse(
+        product_id=p.id,
+        product_name=p.name,
+        current_stock=p.stock,
+        sku=p.sku
+    ) for p in products]
 
 @router.post("/adjust")
 async def adjust_inventory(
     adjustment: InventoryAdjustment,
-    user_id: str = Depends(get_current_user_id)
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db)
 ):
-    store_id = get_user_store_id(user_id)
+    store_id = get_user_store_id(user_id, db)
     
-    if adjustment.product_id not in db.products:
+    product = db.query(Product).filter(Product.id == adjustment.product_id).first()
+    
+    if not product:
         raise HTTPException(status_code=404, detail="Product not found")
-    
-    product = db.products[adjustment.product_id]
     
     if product.store_id != store_id:
         raise HTTPException(status_code=403, detail="Not authorized")
@@ -52,14 +55,14 @@ async def adjust_inventory(
     product.stock = new_stock
     product.updated_at = datetime.utcnow()
     
-    event_id = db.generate_id()
     event = InventoryEvent(
-        id=event_id,
         product_id=adjustment.product_id,
         quantity_change=adjustment.quantity_change,
         reason=adjustment.reason
     )
-    db.inventory_events[event_id] = event
+    db.add(event)
+    
+    db.commit()
     
     return {
         "message": "Inventory adjusted",

@@ -1,63 +1,64 @@
 from fastapi import APIRouter, HTTPException, Depends
 from typing import List, Optional
+from sqlalchemy.orm import Session
 from app.schemas.order import OrderCreate, OrderResponse, OrderStatusUpdate
-from app.models.database import db, Order
+from app.db.models import Order, Product, Store
+from app.db.base import get_db
 from app.routes.auth import get_current_user_id
 from datetime import datetime
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 
-def get_user_store_id(user_id: str) -> str:
-    for store in db.stores.values():
-        if store.user_id == user_id:
-            return store.id
-    raise HTTPException(status_code=404, detail="Store not found")
+def get_user_store_id(user_id: str, db: Session) -> str:
+    store = db.query(Store).filter(Store.user_id == user_id).first()
+    if not store:
+        raise HTTPException(status_code=404, detail="Store not found")
+    return store.id
 
 @router.get("", response_model=List[OrderResponse])
 async def list_orders(
     user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
     status: Optional[str] = None
 ):
-    store_id = get_user_store_id(user_id)
-    orders = []
+    store_id = get_user_store_id(user_id, db)
     
-    for order in db.orders.values():
-        if order.store_id != store_id:
-            continue
-        
-        if status and order.status != status:
-            continue
-        
-        orders.append(OrderResponse(
-            id=order.id,
-            store_id=order.store_id,
-            customer_name=order.customer_name,
-            customer_phone=order.customer_phone,
-            customer_email=order.customer_email,
-            total_amount=order.total_amount,
-            status=order.status,
-            items=order.items,
-            created_at=order.created_at,
-            updated_at=order.updated_at
-        ))
+    query = db.query(Order).filter(Order.store_id == store_id)
     
-    return sorted(orders, key=lambda x: x.created_at, reverse=True)
+    if status:
+        query = query.filter(Order.status == status)
+    
+    orders = query.order_by(Order.created_at.desc()).all()
+    
+    return [OrderResponse(
+        id=o.id,
+        store_id=o.store_id,
+        customer_name=o.customer_name,
+        customer_phone=o.customer_phone,
+        customer_email=o.customer_email,
+        total_amount=o.total_amount,
+        status=o.status.value,
+        items=o.items,
+        created_at=o.created_at,
+        updated_at=o.updated_at
+    ) for o in orders]
 
 @router.post("", response_model=OrderResponse)
 async def create_order(
     order: OrderCreate,
-    user_id: str = Depends(get_current_user_id)
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db)
 ):
-    store_id = get_user_store_id(user_id)
+    store_id = get_user_store_id(user_id, db)
     
     total_amount = 0.0
     items = []
     
     for item in order.items:
-        if item.product_id not in db.products:
-            raise HTTPException(status_code=404, detail=f"Product {item.product_id} not found")
+        product = db.query(Product).filter(Product.id == item.product_id).first()
         
-        product = db.products[item.product_id]
+        if not product:
+            raise HTTPException(status_code=404, detail=f"Product {item.product_id} not found")
         
         if product.store_id != store_id:
             raise HTTPException(status_code=403, detail="Product not in your store")
@@ -76,9 +77,7 @@ async def create_order(
             "total": item_total
         })
     
-    order_id = db.generate_id()
     new_order = Order(
-        id=order_id,
         store_id=store_id,
         customer_name=order.customer_name,
         customer_phone=order.customer_phone,
@@ -87,7 +86,9 @@ async def create_order(
         items=items
     )
     
-    db.orders[order_id] = new_order
+    db.add(new_order)
+    db.commit()
+    db.refresh(new_order)
     
     return OrderResponse(
         id=new_order.id,
@@ -96,7 +97,7 @@ async def create_order(
         customer_phone=new_order.customer_phone,
         customer_email=new_order.customer_email,
         total_amount=new_order.total_amount,
-        status=new_order.status,
+        status=new_order.status.value,
         items=new_order.items,
         created_at=new_order.created_at,
         updated_at=new_order.updated_at
@@ -105,42 +106,48 @@ async def create_order(
 @router.post("/{order_id}/confirm")
 async def confirm_order(
     order_id: str,
-    user_id: str = Depends(get_current_user_id)
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db)
 ):
-    store_id = get_user_store_id(user_id)
+    store_id = get_user_store_id(user_id, db)
     
-    if order_id not in db.orders:
+    order = db.query(Order).filter(Order.id == order_id).first()
+    
+    if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    
-    order = db.orders[order_id]
     
     if order.store_id != store_id:
         raise HTTPException(status_code=403, detail="Not authorized")
     
-    if order.status != "pending":
+    if order.status.value != "pending":
         raise HTTPException(status_code=400, detail="Order already processed")
     
     for item in order.items:
         product_id = item["product_id"]
         quantity = item["quantity"]
         
-        if product_id in db.products:
-            product = db.products[product_id]
+        product = db.query(Product).filter(Product.id == product_id).first()
+        if product:
             product.stock -= quantity
             product.updated_at = datetime.utcnow()
     
     order.status = "confirmed"
     order.updated_at = datetime.utcnow()
     
+    db.commit()
+    
     print(f"Order {order_id} confirmed - WhatsApp notification would be sent here")
     
     return {"message": "Order confirmed", "order_id": order_id}
 
 @router.post("/export")
-async def export_orders(user_id: str = Depends(get_current_user_id)):
-    store_id = get_user_store_id(user_id)
+async def export_orders(
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db)
+):
+    store_id = get_user_store_id(user_id, db)
     
-    orders = [o for o in db.orders.values() if o.store_id == store_id]
+    orders = db.query(Order).filter(Order.store_id == store_id).all()
     
     return {
         "message": "Export ready",

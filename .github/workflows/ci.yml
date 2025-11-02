@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  backend-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+      
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+      
+      - name: Install dependencies
+        working-directory: apps/ondc-api
+        run: poetry install
+      
+      - name: Run ruff
+        working-directory: apps/ondc-api
+        run: poetry run ruff check .
+        continue-on-error: true
+
+  frontend-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+      
+      - name: Install dependencies
+        working-directory: apps/ondc-web
+        run: npm ci
+      
+      - name: Run lint
+        working-directory: apps/ondc-web
+        run: npm run lint
+        continue-on-error: true
+      
+      - name: Run typecheck
+        working-directory: apps/ondc-web
+        run: npm run typecheck
+        continue-on-error: true
+      
+      - name: Build
+        working-directory: apps/ondc-web
+        run: npm run build
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Test Docker Compose
+        run: |
+          cd infra
+          docker compose config
