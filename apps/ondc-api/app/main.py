@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import psycopg
-from app.routes import auth, products, orders, inventory, analytics, notifications, billing
+from app.routes import auth, products, orders, inventory, analytics, notifications, billing, images, webhooks, pricing_rules
 from app.core.config import settings
 
 app = FastAPI(
@@ -26,6 +26,9 @@ app.include_router(inventory.router, prefix=settings.API_V1_STR)
 app.include_router(analytics.router, prefix=settings.API_V1_STR)
 app.include_router(notifications.router, prefix=settings.API_V1_STR)
 app.include_router(billing.router, prefix=settings.API_V1_STR)
+app.include_router(images.router, prefix=settings.API_V1_STR)
+app.include_router(webhooks.router, prefix=settings.API_V1_STR)
+app.include_router(pricing_rules.router, prefix=settings.API_V1_STR)
 
 @app.get("/healthz")
 async def healthz():
