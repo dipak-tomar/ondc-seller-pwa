@@ -59,6 +59,32 @@ npm run dev
 
 Frontend will run on http://localhost:5173
 
+### Test Credentials
+
+The app uses OTP-based authentication. You can use any email or phone number to test:
+
+1. **Email Login:**
+   - Enter any email (e.g., `test@example.com`)
+   - Click "Send OTP"
+   - Check the backend terminal logs for the generated OTP
+   - Enter the OTP to login
+
+2. **Phone Login:**
+   - Enter any phone number (e.g., `+919876543210`)
+   - Click "Send OTP"
+   - Check the backend terminal logs for the generated OTP
+   - Enter the OTP to login
+
+**Note:** The OTP is printed in the backend console logs since this is a development/demo environment. In production, OTPs would be sent via SMS/Email services.
+
+**Example:**
+```
+Backend logs will show:
+INFO:     Generated OTP for test@example.com: 123456
+```
+
+The OTP expires after 10 minutes.
+
 ## Project Structure
 
 ```
